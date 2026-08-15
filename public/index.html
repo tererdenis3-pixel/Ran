@@ -165,7 +165,41 @@
       document.querySelectorAll('.progress .dot').forEach((d,i) => d.classList.toggle('active', i < step));
     }
     show('s1');
-
+    
+// Helper: centralize POST requests and surface errors
+async function apiPost(path, body) {
+  const url = path; // relative path will hit same origin
+  console.log('API POST', url, body);
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    // network-level success (we got a response)
+    const text = await resp.text();
+    let data;
+    try { data = text ? JSON.parse(text) : {}; } catch (err) {
+      // response is not JSON
+      throw new Error(`Invalid JSON response from ${url}: ${text}`);
+    }
+    if (!resp.ok) {
+      // Server returned error status; show details if provided
+      const details = data.details || data.error || JSON.stringify(data);
+      const msg = `HTTP ${resp.status} ${resp.statusText} - ${details}`;
+      const e = new Error(msg);
+      e.payload = data;
+      throw e;
+    }
+    console.log('API success', url, data);
+    return data;
+  } catch (err) {
+    // Network error or thrown above
+    console.error('API POST error', url, err);
+    throw err;
+  }
+}
+    
     // state
     let applicationId = null;
     let pollTimer = null;
